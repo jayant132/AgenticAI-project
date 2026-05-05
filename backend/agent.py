@@ -48,7 +48,7 @@ class AgentState(TypedDict,total = False):
         print("Entering route node")
 
         # extract query
-        next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),"")
+        query = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),"")
         web_search_enabled = state.get("web_search_enabled",True)
         
         print(f"router  recieved web info : {web_search_enabled}")
@@ -90,5 +90,41 @@ class AgentState(TypedDict,total = False):
             "\n- User: 'Hello there!' -> Route: 'end', reply='Hello! How can I assist you today?'"
         )
 
+        messages =[
+            ("system" ,system_prompt) ,
+            ("user", query)
+        ]
 
+        result : RouteDecision = router_llm.invoke(messages)  
+        intial_router_decision = result.route
+        router_override_reason = None
+              
+    
+    # Overrride the Router decision to go for web search
+        if not web_search_enabled and result.route == "web":
+            print("Web search is disabled, overrriding to rag")
+            result.route == "rag"
+            router_override_reason = "Web search is disabled by user; overrriding to rag"
+            print(f"router decision changed from web search to rag ")
         
+        print(f"Router final decision: {result.route},reply (if 'end'): {result.reply}")
+        
+        out = {
+            "messages" : state["messages"],
+            "route" : result.route ,
+            "web_search_enabled" : result.web_search_enabled,
+            "rag_answer" : ""
+        }
+
+        if router_override_reason : 
+            out["intial_router_decision"] = intial_router_decision
+            out["router_override_reason"] = router_override_reason
+        
+        #append reply if route is end
+        if result.route == "end" : 
+            out["messages"] = state["messages"] + [AIMessage(content=result.reply or "Hello! I'm not sure how to help with that, could you please rephrase?")]
+        
+        print('Exsting route node')
+        return out 
+
+    # rag lookup node 
