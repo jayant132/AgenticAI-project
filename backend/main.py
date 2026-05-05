@@ -145,7 +145,9 @@ async def chat_with_agent(request: QueryRequest):
             elif current_node_name == "rag_lookup":
                 rag_content_summary = node_output_state.get("rag", "")[:200] + "..."
                 
-                rag_sufficient = node_output_state.get("route") == "answer" 
+                # FIX 6: was node_output_state.get("route") == "answer" which is unreliable;
+                # now reads sufficiency_verdict stored directly by rag_node
+                rag_sufficient = node_output_state.get("sufficiency_verdict") == "Sufficient"
                 
                 if rag_sufficient:
                     event_description = f"RAG Lookup performed. Content found and deemed sufficient. Proceeding to answer."

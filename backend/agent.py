@@ -64,6 +64,7 @@ class AgentState(TypedDict,total = False):
     rag: str
     web: str
     web_search_enabled: bool
+    sufficiency_verdict: str  # FIX 5: added missing field so rag_node can store it
 
  
 # node for individaul functions
@@ -124,10 +125,10 @@ def router_node(state: AgentState) -> AgentState:
         router_override_reason = None
               
     
-    # Overrride the Router decision to go for web search
+        # Overrride the Router decision to go for web search
         if not web_search_enabled and result.route == "web":
             print("Web search is disabled, overrriding to rag")
-            result.route == "rag"
+            result.route = "rag"  # FIX 1: was == (comparison) instead of = (assignment)
             router_override_reason = "Web search is disabled by user; overrriding to rag"
             print(f"router decision changed from web search to rag ")
         
@@ -136,12 +137,11 @@ def router_node(state: AgentState) -> AgentState:
         out = {
             "messages" : state["messages"],
             "route" : result.route ,
-            "web_search_enabled" : result.web_search_enabled,
-            "rag_answer" : ""
+            "web_search_enabled" : web_search_enabled,  # FIX 4: was result.web_search_enabled (from LLM), use state value instead
         }
 
         if router_override_reason : 
-            out["intial_router_decision"] = intial_router_decision
+            out["initial_router_decision"] = intial_router_decision  # FIX 2: was "intial_router_decision" (typo), main.py reads "initial_router_decision"
             out["router_override_reason"] = router_override_reason
         
         #append reply if route is end
@@ -207,7 +207,8 @@ def rag_node(state : AgentState) -> AgentState:
         **state,
         "rag": chunks,
         "route": next_route,
-        "web_search_enabled": web_search_enabled 
+        "web_search_enabled": web_search_enabled,
+        "sufficiency_verdict": "Sufficient" if verdict.sufficient else "Not Sufficient"  # FIX 5: store verdict so main.py can read it
     }
 
 # --- Node 3: web search ---
@@ -216,17 +217,28 @@ def web_node(state: AgentState,config: RunnableConfig) -> AgentState:
         query = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
     
     # Check if web search is actually enabled before performing it
-        web_search_enabled = config.get("configurable", {}).get("web_search_enabled", True) # <-- CHANGED LINE
+        web_search_enabled = config.get("configurable", {}).get("web_search_enabled", True)
         print(f"Router received web search info : {web_search_enabled}")
         if not web_search_enabled:
             print("Web search node entered but web search is disabled. Skipping actual search.")
             return {**state, "web": "Web search was disabled by the user.", "route": "answer"}
 
         print(f"Web search query: {query}")
-        snippets = rag_search_tool.invoke(query)
+        results = tavily.invoke(query)  # FIX 3: was rag_search_tool.invoke(query) — web_node must call tavily, not RAG
 
-        if snippets.startswith("WEB_ERROR::"):
-            print(f"Web Error: {snippets}. Proceeding to answer with limited info.")
+        # TavilySearch.invoke() returns either:
+        #   - a dict like {"results": [{"url":..., "title":..., "content":...}, ...]}
+        #   - or a list of strings/dicts depending on version
+        if isinstance(results, dict):
+            items = results.get("results", [])
+            snippets = "\n\n".join([r.get("content", "") for r in items if isinstance(r, dict)])
+        elif isinstance(results, list):
+            snippets = "\n\n".join([r if isinstance(r, str) else r.get("content", "") for r in results])
+        else:
+            snippets = str(results) if results else ""
+
+        if not snippets:
+            print(f"Web search returned no results. Proceeding to answer with limited info.")
             return {**state, "web": "", "route": "answer"}
 
         print(f"Web snippets retrieved: {snippets[:200]}...")
